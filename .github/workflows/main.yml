@@ -60,7 +60,7 @@ jobs:
         Write-Output "============================================"
         Write-Output "Address: $tunnelUrl"
         Write-Output "Username: "sami244"
-        Write-Output "Password: Kamel@123"
+        Write-Output "Password: "sami244"
         Write-Output "--------------------------------------------"
         Write-Output "Instructions:"
         Write-Output "1. Press Win + R, type 'mstsc' and hit Enter"

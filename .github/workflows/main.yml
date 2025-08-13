@@ -31,16 +31,16 @@ jobs:
         net user kamel007 Kamel@123 /add
         net localgroup administrators kamel007 /add
 
-    - name: Start Ngrok Tunnel
+    - name: Start Ngrok Tunnel (Fast Mode)
       run: |
         Start-Process -FilePath "$($pwd)\ngrok.exe" -ArgumentList 'tcp 3389 --log=stdout' -NoNewWindow -RedirectStandardOutput "ngrok.log"
 
         $tunnelUrl = $null
-        $timeout = 60
+        $timeout = 15  # بدل 60 ثانية، الآن 15 ثانية فقط
 
         while ($timeout -gt 0 -and -not $tunnelUrl) {
-          Start-Sleep -Seconds 5
-          $timeout -= 5
+          Start-Sleep -Seconds 1  # بدل 5 ثواني، الآن ثانية واحدة
+          $timeout -= 1
           try {
             $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction Stop
             $tunnelUrl = $response.tunnels[0].public_url -replace "tcp://", ""

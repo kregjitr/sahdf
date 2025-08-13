@@ -1,13 +1,46 @@
-    - name: Start Ngrok Tunnel
+name: Windows RDP via Ngrok
+
+on: [push]
+
+jobs:
+  rdp-setup:
+    runs-on: windows-latest
+    timeout-minutes: 360  # GitHub Free max runtime is 6 hours
+
+    steps:
+    - name: Download and extract Ngrok
       run: |
-        Start-Process -FilePath "$($pwd)\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -NoNewWindow -RedirectStandardOutput "ngrok.log"
+        Invoke-WebRequest "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-windows-amd64.zip" -OutFile ngrok.zip
+        Expand-Archive ngrok.zip -DestinationPath "$env:USERPROFILE"
+        Remove-Item ngrok.zip
+        Copy-Item "$env:USERPROFILE\ngrok.exe" "$env:GITHUB_WORKSPACE"
+
+    - name: Authenticate Ngrok
+      run: |
+        $ErrorActionPreference = "Stop"
+        .\ngrok.exe authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
+
+    - name: Enable RDP and Firewall
+      run: |
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        New-NetFirewallRule -DisplayName "Allow RDP via Ngrok" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389
+
+    - name: Create Admin User
+      run: |
+        net user kamel007 Kamel@123 /add
+        net localgroup administrators kamel007 /add
+
+    - name: Start Ngrok Tunnel (Fast Mode)
+      run: |
+        Start-Process -FilePath "$($pwd)\ngrok.exe" -ArgumentList 'tcp 3389 --log=stdout' -NoNewWindow -RedirectStandardOutput "ngrok.log"
 
         $tunnelUrl = $null
-        $timeout = 60
+        $timeout = 15  # بدل 60 ثانية، الآن 15 ثانية فقط
 
         while ($timeout -gt 0 -and -not $tunnelUrl) {
-          Start-Sleep -Seconds 5
-          $timeout -= 5
+          Start-Sleep -Seconds 1  # بدل 5 ثواني، الآن ثانية واحدة
+          $timeout -= 1
           try {
             $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction Stop
             $tunnelUrl = $response.tunnels[0].public_url -replace "tcp://", ""
@@ -36,3 +69,8 @@
         Write-Output "============================================"
 
         while ($true) { Start-Sleep -Seconds 300 }
+
+    - name: Cleanup Ngrok
+      if: always()
+      run: |
+        Stop-Process -Name "ngrok" -Force -ErrorAction SilentlyContinue

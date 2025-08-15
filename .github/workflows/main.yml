@@ -1,167 +1,79 @@
-name: Windows RDP via Ngrok - 24/7 Continuous
+name: Permanent-RDP-Secure
 
-on: 
-  push:
-    branches: [ main, master ]
+on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 */5 * * *'  # Run every 5 hours to ensure continuous operation
 
 jobs:
-  rdp-setup:
-    runs-on: windows-latest
-    timeout-minutes: 300  # 5 hours per session
-    
+  build:
+    runs-on: self-hosted
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Download and extract Ngrok
+    - name: إعداد المستخدم RDP
       run: |
-        Write-Host "🚀 Downloading Ngrok..."
-        Invoke-WebRequest "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-windows-amd64.zip" -OutFile ngrok.zip
-        Write-Host "📦 Extracting Ngrok..."
-        Expand-Archive ngrok.zip -DestinationPath "$env:USERPROFILE" -Force
-        Remove-Item ngrok.zip
-        Copy-Item "$env:USERPROFILE\ngrok.exe" "$env:GITHUB_WORKSPACE" -Force
-        Write-Host "✅ Ngrok ready!"
-
-    - name: Authenticate Ngrok
-      run: |
-        Write-Host "🔐 Authenticating Ngrok..."
-        $ErrorActionPreference = "Stop"
-        .\ngrok.exe authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
-        Write-Host "✅ Authentication successful!"
-
-    - name: Enable RDP and Firewall
-      run: |
-        Write-Host "🔧 Configuring RDP and firewall..."
-        # Enable RDP
-        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
-        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0
-        
-        # Configure firewall
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-        New-NetFirewallRule -DisplayName "Allow RDP via Ngrok" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389 -Profile Any
-        
-        Write-Host "✅ RDP and firewall configured!"
-
-    - name: Create Admin User
-      run: |
-        Write-Host "👤 Setting up admin user..."
+        Write-Host "👤 إنشاء مستخدم RDP ثابت..."
         $userExists = Get-LocalUser -Name "kamel007" -ErrorAction SilentlyContinue
         if (-not $userExists) {
           net user kamel007 Kamel@123 /add
           net localgroup administrators kamel007 /add
-          Write-Host "✅ User kamel007 created!"
+          Write-Host "✅ تم إنشاء المستخدم kamel007"
         } else {
-          Write-Host "ℹ️ User kamel007 already exists"
+          Write-Host "ℹ️ المستخدم موجود بالفعل"
         }
 
-    - name: Start Ngrok Tunnel (Continuous Mode)
+    - name: تفعيل RDP وفتح البورت 30120
       run: |
-        Write-Host "🌐 Starting Ngrok tunnel..."
-        
-        # Start ngrok in background
-        Start-Process -FilePath "$($pwd)\ngrok.exe" -ArgumentList 'tcp 3389 --log=stdout' -NoNewWindow -RedirectStandardOutput "ngrok.log"
-        
-        # Wait for tunnel to be ready
-        $tunnelUrl = $null
-        $timeout = 20  # 20 seconds timeout
-        
-        Write-Host "⏳ Waiting for tunnel..."
-        
-        while ($timeout -gt 0 -and -not $tunnelUrl) {
-          Start-Sleep -Seconds 1
-          $timeout -= 1
-          
+        Write-Host "🔧 تفعيل RDP..."
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0
+
+        Write-Host "🛡️ ضبط Firewall Rules..."
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        # السماح فقط على البورت 30120
+        New-NetFirewallRule -DisplayName "Allow RDP Custom Port" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 30120 -Profile Any
+
+    - name: ضبط IP ثابت
+      run: |
+        Write-Host "📌 ضبط IP ثابت: 192.168.0.50"
+        $interface = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
+        New-NetIPAddress -InterfaceIndex $interface.InterfaceIndex -IPAddress 192.168.0.50 -PrefixLength 24 -DefaultGateway 192.168.0.1 -ErrorAction SilentlyContinue
+
+    - name: حذف التطبيقات إلا Chrome
+      run: |
+        Write-Host "🧹 حذف كل البرامج المثبتة باستثناء Google Chrome..."
+        $apps = Get-WmiObject -Class Win32_Product | Where-Object { $_.Name -notlike "*Google Chrome*" }
+        foreach ($app in $apps) {
+          Write-Host "❌ إزالة: $($app.Name)"
           try {
-            $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction Stop
-            if ($response.tunnels -and $response.tunnels.Count -gt 0) {
-              $tunnelUrl = $response.tunnels[0].public_url -replace "tcp://", ""
-              Write-Host "✅ Tunnel ready: $tunnelUrl"
-            }
+            $app.Uninstall() | Out-Null
+            Write-Host "✅ تم الحذف"
           } catch {
-            $logContent = Get-Content "ngrok.log" -ErrorAction SilentlyContinue
-            $tunnelUrl = $logContent | Select-String -Pattern "tcp://([a-zA-Z0-9\.\-]+:\d+)" | ForEach-Object { $_.Matches.Groups[1].Value }
-            if ($tunnelUrl) {
-              Write-Host "✅ Tunnel ready (log): $tunnelUrl"
-            }
-          }
-          
-          if ($timeout % 5 -eq 0) {
-            Write-Host "⏰ Waiting... ($timeout seconds left)"
+            Write-Host "⚠️ فشل الحذف: $($app.Name)"
           }
         }
 
-        if (-not $tunnelUrl) {
-          Write-Output '::error::❌ Failed to establish tunnel'
-          exit 1
-        }
-
-        # Display connection details
-        Write-Output "============================================"
-        Write-Output "||     🎯 RDP CONNECTION ACTIVE         ||"
-        Write-Output "============================================"
-        Write-Output "🌐 Address: $tunnelUrl"
-        Write-Output "👤 Username: kamel007"
-        Write-Output "🔑 Password: Kamel@123"
-        Write-Output "⏰ Session: 5 hours (auto-restart)"
-        Write-Output "🔄 Status: Continuous operation"
-        Write-Output "--------------------------------------------"
-        Write-Output "📱 Instructions:"
-        Write-Output "1. Win + R → mstsc → Enter"
-        Write-Output "2. Connect to: $tunnelUrl"
-        Write-Output "3. Use credentials above"
-        Write-Output "4. Session auto-restarts every 5 hours"
-        Write-Output "============================================"
-        
-        # Keep the job running with health checks
-        Write-Host "🔄 Tunnel active. Monitoring health..."
-        $startTime = Get-Date
-        $maxRuntime = [TimeSpan]::FromMinutes(290)  # 290 minutes to be safe
-        
-        while ((Get-Date) - $startTime -lt $maxRuntime) {
-          Start-Sleep -Seconds 30
-          $elapsed = (Get-Date) - $startTime
-          
-          # Health check every 2 minutes
-          if ($elapsed.TotalSeconds % 120 -lt 30) {
-            try {
-              $health = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction Stop
-              if ($health.tunnels -and $health.tunnels.Count -gt 0) {
-                Write-Host "✅ Health check: Tunnel active for $($elapsed.Hours)h $($elapsed.Minutes)m"
-              } else {
-                Write-Host "⚠️ Health check: Tunnel may be down, restarting..."
-                break
-              }
-            } catch {
-              Write-Host "⚠️ Health check failed, restarting..."
-              break
-            }
-          }
-        }
-        
-        Write-Host "🔄 Session ending, will restart automatically..."
-
-    - name: Cleanup and Restart
-      if: always()
+    - name: تفعيل حماية Windows Defender الأساسية
       run: |
-        Write-Host "🧹 Cleaning up current session..."
-        Stop-Process -Name "ngrok" -Force -ErrorAction SilentlyContinue
-        Get-Process -Name "ngrok" -ErrorAction SilentlyContinue | Stop-Process -Force
-        
-        Write-Output "============================================"
-        Write-Output "||     🔄 SESSION COMPLETED             ||"
-        Write-Output "============================================"
-        Write-Output "✅ Current session ended successfully"
-        Write-Output "🔄 New session will start automatically"
-        Write-Output "⏰ Next restart in 5 hours"
-        Write-Output "🌐 RDP will be available 24/7"
-        Write-Output "============================================"
+        Write-Host "🛡️ تفعيل Windows Defender وحماية الوقت الحقيقي..."
+        Set-MpPreference -DisableRealtimeMonitoring $false
+        Set-MpPreference -EnableNetworkProtection Enabled
+        Set-MpPreference -PUAProtection Enabled
 
-    - name: Auto-Restart Notification
-      if: always()
+    - name: تفعيل Account Lockout Policy
       run: |
-        Write-Host "🚀 Preparing for auto-restart..."
-        Write-Output "::notice::RDP session completed. Auto-restarting in 5 hours for 24/7 operation."
+        Write-Host "🔒 تفعيل سياسة Account Lockout ضد Brute Force..."
+        secedit /export /cfg secconfig.cfg
+        (Get-Content secconfig.cfg) -replace 'LockoutBadCount = 0', 'LockoutBadCount = 5' | Set-Content secconfig.cfg
+        (Get-Content secconfig.cfg) -replace 'ResetLockoutCount = 0', 'ResetLockoutCount = 30' | Set-Content secconfig.cfg
+        secedit /configure /db secedit.sdb /cfg secconfig.cfg /areas SECURITYPOLICY
+        Remove-Item secconfig.cfg
+
+    - name: عرض بيانات الدخول والحماية
+      run: |
+        Write-Output "============================================"
+        Write-Output "🌐 IP ثابت: 192.168.0.50"
+        Write-Output "👤 المستخدم: kamel007"
+        Write-Output "🔑 كلمة المرور: Kamel@123"
+        Write-Output "🔌 بورت RDP: 30120"
+        Write-Output "🛡️ حماية أساسية مفعلة (Firewall, Defender, Lockout Policy)"
+        Write-Output "📢 تأكد من فتح البورت 30120 من الراوتر إذا كان الجهاز خلف شبكة"
+        Write-Output "============================================"
